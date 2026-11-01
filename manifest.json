@@ -1,0 +1,11 @@
+{
+    "display_name": "Card Updater (봇 업데이터)",
+    "loading_order": 100,
+    "dependencies": [],
+    "js": "index.js",
+    "css": "style.css",
+    "version": "1.0.0",
+    "homePage": "",
+    "auto_update": true,
+    "minimum_client_version": "1.13.0"
+}

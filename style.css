@@ -1,0 +1,35 @@
+.card_updater_confirm ul,
+.card_updater_list {
+    text-align: left;
+    margin: 0.5em 0;
+    padding-left: 1.2em;
+}
+
+.card_updater_warn {
+    color: var(--warning, #e6a23c);
+    font-weight: bold;
+}
+
+.card_updater_notes {
+    text-align: left;
+    padding: 0.5em 0.75em;
+    margin: 0.5em 0;
+    border-left: 3px solid var(--SmartThemeQuoteColor, #888);
+    background: var(--black30a, rgba(0, 0, 0, 0.2));
+    border-radius: 4px;
+}
+
+.card_updater_small {
+    font-size: 0.85em;
+    opacity: 0.8;
+}
+
+.card_updater_pre {
+    text-align: left;
+    font-size: 0.85em;
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding: 0.5em;
+    background: var(--black30a, rgba(0, 0, 0, 0.2));
+    border-radius: 4px;
+}

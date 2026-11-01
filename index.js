@@ -303,6 +303,9 @@ async function performUpdate(file, { notes = '', isRollback = false } = {}) {
         const fav = !!(oldChar.fav || oldChar.data?.extensions?.fav);
         const oldVars = oldChar.data?.extensions?.tavern_helper?.variables;
         const oldWorld = oldChar.data?.extensions?.world;
+        // Tavern Helper keeps already-running scripts in memory, so changed scripts need a page reload.
+        const scriptsChanged = JSON.stringify(oldChar.data?.extensions?.tavern_helper?.scripts ?? [])
+            !== JSON.stringify(newData.extensions?.tavern_helper?.scripts ?? []);
 
         // 0) Flush the current chat to disk first (we never touch it afterwards).
         if (typeof c.saveChat === 'function') await c.saveChat();
@@ -337,6 +340,7 @@ async function performUpdate(file, { notes = '', isRollback = false } = {}) {
         await c.getCharacters();
         const newChid = ctx().characters.findIndex(ch => ch.avatar === avatar);
         if (newChid >= 0) {
+            await ctx().unshallowCharacter(newChid);
             await ctx().selectCharacterById(newChid, { switchMenu: false });
             if (chatFile && ctx().getCurrentChatId() !== chatFile) {
                 await ctx().openCharacterChat(chatFile);
@@ -347,6 +351,15 @@ async function performUpdate(file, { notes = '', isRollback = false } = {}) {
         const verText = newVersion ? `v${newVersion}` : '새 버전';
         toastr.success(`${newData.name} → ${verText}${worldName ? ` (로어북: ${worldName})` : ''}`, isRollback ? '되돌리기 완료' : '업데이트 완료');
         checkedThisSession.delete(avatar);
+
+        if (scriptsChanged) {
+            const reload = await ctx().Popup.show.confirm('새로고침이 필요해요',
+                `<p>태번헬퍼 스크립트가 바뀌었어요.</p>
+                 <p>지금 돌아가는 건 예전 스크립트라서, <b>새로고침해야</b> 새 스크립트·상태창이 적용돼요.</p>
+                 <p class="card_updater_small">채팅은 이미 저장돼 있어서 새로고침해도 괜찮아요.</p>`,
+                { okButton: '지금 새로고침', cancelButton: '나중에' });
+            if (reload) location.reload();
+        }
     } catch (err) {
         console.error(LOG, err);
         toastr.clear(toast);

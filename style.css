@@ -1,3 +1,198 @@
+/* ── Card Updater menu ─────────────────────────────── */
+
+.cu-menu {
+    --cu-border: var(--SmartThemeBorderColor, rgba(127, 127, 127, 0.35));
+    --cu-surface: var(--black30a, rgba(0, 0, 0, 0.06));
+    --cu-accent: var(--SmartThemeQuoteColor, #4a90d9);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: min(420px, 100%);
+    margin: 0 auto;
+    text-align: left;
+}
+
+.cu-head {
+    text-align: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--cu-border);
+}
+
+.cu-title {
+    font-size: 0.8em;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    margin-bottom: 4px;
+}
+
+.cu-bot {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.cu-bot-name {
+    font-size: 1.25em;
+    font-weight: 700;
+}
+
+.cu-chip {
+    font-size: 0.75em;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--cu-accent);
+    color: var(--cu-accent);
+}
+
+/* Main actions: two equal tiles */
+.cu-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.cu-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 16px 10px;
+    border: 1px solid var(--cu-border);
+    border-radius: 12px;
+    background: var(--cu-surface);
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 0.15s, transform 0.15s, background 0.15s;
+}
+
+.cu-tile > i {
+    font-size: 1.6em;
+    color: var(--cu-accent);
+}
+
+.cu-tile-title {
+    font-weight: 700;
+}
+
+.cu-tile-desc,
+.cu-row-desc {
+    font-size: 0.8em;
+    opacity: 0.65;
+}
+
+/* Secondary actions: list rows */
+.cu-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--cu-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.cu-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.cu-row + .cu-row {
+    border-top: 1px solid var(--cu-border);
+}
+
+.cu-row > i:first-child {
+    width: 1.2em;
+    text-align: center;
+    opacity: 0.8;
+}
+
+.cu-row-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.cu-row-title {
+    font-weight: 600;
+}
+
+.cu-arrow {
+    font-size: 0.8em;
+    opacity: 0.4;
+}
+
+.cu-tile:hover,
+.cu-tile:focus-visible {
+    border-color: var(--cu-accent);
+    transform: translateY(-1px);
+    outline: none;
+}
+
+.cu-row:hover,
+.cu-row:focus-visible {
+    background: var(--cu-surface);
+    outline: none;
+}
+
+.cu-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.cu-disabled:hover {
+    transform: none;
+    border-color: var(--cu-border);
+    background: transparent;
+}
+
+/* Settings */
+.cu-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--cu-surface);
+}
+
+.cu-settings-label {
+    font-size: 0.75em;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    opacity: 0.6;
+}
+
+.cu-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+
+.cu-toggle input {
+    margin: 0;
+}
+
+.cu-foot {
+    text-align: center;
+    font-size: 0.78em;
+    opacity: 0.5;
+}
+
+@media (max-width: 420px) {
+    .cu-tiles {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ── Other dialogs ─────────────────────────────────── */
+
 .card_updater_confirm ul,
 .card_updater_list {
     text-align: left;

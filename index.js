@@ -1,4 +1,4 @@
-// Card Updater (봇 업데이터) for SillyTavern
+// Card Updater for SillyTavern
 // Replaces a character card with a newer version in one click and keeps the
 // user's chats, favorite flag, chat link and Tavern Helper character variables.
 // The embedded lorebook is re-imported automatically (old one is backed up first).
@@ -14,8 +14,9 @@ const BACKUP_PREFIX = 'card_updater_backup:';
 const LOG = '[Card Updater]';
 
 const defaultSettings = Object.freeze({
-    autoCheck: true,
-    backupLorebook: true,
+    autoCheck: true,       // default for bots without their own setting
+    backupLorebook: true,  // default for bots without their own setting
+    perBot: {},            // { [avatar]: { autoCheck?: boolean, backupLorebook?: boolean } }
     creatorRepo: '',
 });
 
@@ -37,6 +38,21 @@ function getSettings() {
         }
     }
     return extensionSettings[MODULE];
+}
+
+/** Per-bot option (stored locally by avatar file name), falling back to the global default. */
+function getBotOption(avatar, key) {
+    const settings = getSettings();
+    const own = settings.perBot?.[avatar]?.[key];
+    return typeof own === 'boolean' ? own : !!settings[key];
+}
+
+function setBotOption(avatar, key, value) {
+    const settings = getSettings();
+    settings.perBot ??= {};
+    settings.perBot[avatar] ??= {};
+    settings.perBot[avatar][key] = !!value;
+    ctx().saveSettingsDebounced();
 }
 
 function escapeHtml(text) {
@@ -79,8 +95,16 @@ function toRawUrl(url) {
     return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}` : String(url).trim();
 }
 
+/** Readable form of a URL for confirmation dialogs: host + decoded path. */
 function hostOf(url) {
-    try { return new URL(url).host; } catch { return url; }
+    try {
+        const u = new URL(url);
+        let path = u.pathname;
+        try { path = decodeURIComponent(path); } catch { /* keep encoded */ }
+        return `${u.host}${path}`;
+    } catch {
+        return url;
+    }
 }
 
 // ───────────────────── card file parsing ─────────────────────
@@ -204,14 +228,14 @@ function getLorebookTarget(newData, oldWorld) {
 }
 
 /** Overwrites the target lorebook with the card's embedded one. */
-async function syncLorebook(newData, target) {
+async function syncLorebook(newData, target, avatar) {
     const book = newData.character_book;
     if (!target || !book) return;
 
     const c = ctx();
     const names = c.getWorldInfoNames();
 
-    if (getSettings().backupLorebook && names.includes(target)) {
+    if (getBotOption(avatar, 'backupLorebook') && names.includes(target)) {
         const existing = await c.loadWorldInfo(target);
         if (existing) {
             await c.saveWorldInfo(`${target}_backup`, structuredClone(existing), true);
@@ -264,7 +288,7 @@ async function performUpdate(file, { notes = '', isRollback = false } = {}) {
             <ul>
                 <li>✅ 채팅 기록, 즐겨찾기, 태번헬퍼 캐릭터 변수는 그대로예요.</li>
                 <li>🔄 카드 내용, 정규식, 스크립트${hasBook ? ', 로어북' : ''}이 새 버전으로 바뀌어요.</li>
-                ${hasBook && getSettings().backupLorebook ? '<li>💾 기존 로어북은 <code>이름_backup</code>으로 복사해둬요.</li>' : ''}
+                ${hasBook && getBotOption(avatar, 'backupLorebook') ? '<li>💾 기존 로어북은 <code>이름_backup</code>으로 복사해둬요.</li>' : ''}
                 ${isRollback ? '' : '<li>↩️ 지금 카드는 백업해둬서 언제든 되돌릴 수 있어요.</li>'}
             </ul>
         </div>`;
@@ -307,7 +331,7 @@ async function performUpdate(file, { notes = '', isRollback = false } = {}) {
         await mergeAttributes(avatar, update);
 
         // 4) Lorebook: overwrite with the new embedded book (old one copied to _backup first).
-        await syncLorebook(newData, worldName);
+        await syncLorebook(newData, worldName, avatar);
 
         // 5) Refresh and reopen the same chat.
         await c.getCharacters();
@@ -369,7 +393,8 @@ async function onlineUpdate() {
     const { Popup } = ctx();
     const ok = await Popup.show.confirm('새 버전이 있어요',
         `<p>v${escapeHtml(current)} → <b>v${escapeHtml(manifest.version)}</b></p>
-         <p>이 주소에서 받아올게요:<br><code>${escapeHtml(hostOf(cardUrl))}</code></p>
+         <p>이 주소에서 받아올게요:<br><code style="word-break: break-all;">${escapeHtml(hostOf(cardUrl))}</code></p>
+         <p class="card_updater_small">raw.githubusercontent.com은 깃헙이 파일 원본을 보내주는 공식 주소예요. 뒤에 붙은 아이디/저장소 이름을 확인해주세요.</p>
          <p class="card_updater_small">믿을 수 있는 제작자의 주소인지 확인해주세요.</p>`,
         { okButton: '받아오기', cancelButton: '취소' });
     if (!ok) return;
@@ -389,10 +414,10 @@ async function onlineUpdate() {
 }
 
 async function autoCheck() {
-    if (!getSettings().autoCheck) return;
     const cur = getCurrent();
     if (!cur) return;
     const avatar = cur.char.avatar;
+    if (!getBotOption(avatar, 'autoCheck')) return;
     if (checkedThisSession.has(avatar)) return;
     checkedThisSession.add(avatar);
 
@@ -449,6 +474,66 @@ function downloadBlob(blob, filename) {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/**
+ * Client-side port of SillyTavern's server `convertWorldInfoToCharacterBook`.
+ * ST only re-embeds the linked lorebook into the card when the character form is saved,
+ * so lorebook-only edits would otherwise be missing from the exported card.
+ */
+function worldInfoToCharacterBook(name, entries) {
+    const result = { entries: [], name };
+    for (const index in entries) {
+        const entry = entries[index];
+        result.entries.push({
+            id: entry.uid,
+            keys: entry.key,
+            secondary_keys: entry.keysecondary,
+            comment: entry.comment,
+            content: entry.content,
+            constant: entry.constant,
+            selective: entry.selective,
+            insertion_order: entry.order,
+            enabled: !entry.disable,
+            position: entry.position == 0 ? 'before_char' : 'after_char',
+            use_regex: true,
+            extensions: {
+                ...entry.extensions,
+                position: entry.position,
+                exclude_recursion: entry.excludeRecursion,
+                display_index: entry.displayIndex,
+                probability: entry.probability ?? null,
+                useProbability: entry.useProbability ?? false,
+                depth: entry.depth ?? 4,
+                selectiveLogic: entry.selectiveLogic ?? 0,
+                outlet_name: entry.outletName ?? '',
+                group: entry.group ?? '',
+                group_override: entry.groupOverride ?? false,
+                group_weight: entry.groupWeight ?? null,
+                prevent_recursion: entry.preventRecursion ?? false,
+                delay_until_recursion: entry.delayUntilRecursion ?? false,
+                scan_depth: entry.scanDepth ?? null,
+                match_whole_words: entry.matchWholeWords ?? null,
+                use_group_scoring: entry.useGroupScoring ?? false,
+                case_sensitive: entry.caseSensitive ?? null,
+                automation_id: entry.automationId ?? '',
+                role: entry.role ?? 0,
+                vectorized: entry.vectorized ?? false,
+                sticky: entry.sticky ?? null,
+                cooldown: entry.cooldown ?? null,
+                delay: entry.delay ?? null,
+                match_persona_description: entry.matchPersonaDescription ?? false,
+                match_character_description: entry.matchCharacterDescription ?? false,
+                match_character_personality: entry.matchCharacterPersonality ?? false,
+                match_character_depth_prompt: entry.matchCharacterDepthPrompt ?? false,
+                match_scenario: entry.matchScenario ?? false,
+                match_creator_notes: entry.matchCreatorNotes ?? false,
+                triggers: entry.triggers ?? [],
+                ignore_budget: entry.ignoreBudget ?? false,
+            },
+        });
+    }
+    return result;
+}
+
 async function buildRelease() {
     const cur = getCurrent();
     if (!cur) return toastr.warning('봇 하나를 열어둔 상태에서 써주세요.', 'Card Updater');
@@ -499,11 +584,24 @@ async function buildRelease() {
 
     try {
         // Save version + update address into the card
-        await mergeAttributes(avatar, { data: { character_version: newVersion } });
+        // Embed the CURRENT linked lorebook so lorebook-only edits are included.
+        const releaseData = { character_version: newVersion };
+        let bookCount = null;
+        const worldName = char.data?.extensions?.world;
+        if (worldName && c.getWorldInfoNames().includes(worldName)) {
+            const world = await c.loadWorldInfo(worldName);
+            if (world?.entries) {
+                releaseData.character_book = worldInfoToCharacterBook(worldName, world.entries);
+                bookCount = releaseData.character_book.entries.length;
+            }
+        }
+        await mergeAttributes(avatar, { data: releaseData });
+        if (releaseData.character_book) char.data.character_book = releaseData.character_book;
         char.data.character_version = newVersion;
         if (char.json_data) {
             const json = JSON.parse(char.json_data);
             if (json.data) json.data.character_version = newVersion;
+            if (json.data && releaseData.character_book) json.data.character_book = releaseData.character_book;
             char.json_data = JSON.stringify(json);
             if (Number(cur.chid) === Number(ctx().characterId)) $('#character_json_data').val(char.json_data);
         }
@@ -529,17 +627,18 @@ async function buildRelease() {
             if (el && !el.textContent.startsWith('✅')) el.textContent = `✅ ${el.textContent}`;
         };
         const downloadButtons = [
-            { text: `🖼 봇카드 받기 (${pngName})`, classes: ['popup-button-ok'], action: (e) => { downloadBlob(pngBlob, pngName); markDone(e); } },
+            { text: `🤖 봇카드 받기 (${pngName})`, classes: ['popup-button-ok'], action: (e) => { downloadBlob(pngBlob, pngName); markDone(e); } },
             { text: `📄 업데이트 정보 받기 (${jsonName})`, classes: ['popup-button-ok'], action: (e) => { downloadBlob(jsonBlob, jsonName); markDone(e); } },
         ];
 
         await c.Popup.show.text('📦 배포 파일 완성!',
             `<p>아래 버튼 <b>2개를 각각 눌러서</b> 파일을 받아주세요:</p>
              <ul class="card_updater_list">
-                <li><code>${escapeHtml(pngName)}</code> (봇카드, v${escapeHtml(newVersion)})</li>
+                <li><code>${escapeHtml(pngName)}</code> (봇카드, v${escapeHtml(newVersion)}${bookCount !== null ? `, 로어북 ${bookCount}개 항목 포함` : ''})</li>
                 <li><code>${escapeHtml(jsonName)}</code> (업데이트 정보)</li>
              </ul>
              <p><b>이제 할 일:</b> 깃헙 저장소 페이지에서 <b>Add file → Upload files</b>를 누르고, 두 파일을 끌어다 놓은 다음 <b>Commit changes</b>를 누르면 끝이에요.</p>
+             <p class="card_updater_warn">⚠️ 다운로드 폴더에 같은 이름 파일이 이미 있으면 브라우저가 <code>(2)</code>를 붙여요. 올리기 전에 이름 끝의 <code> (2)</code>를 지우거나, 받기 전에 다운로드 폴더의 예전 파일을 지워주세요.</p>
              <p class="card_updater_small">파일 이름은 바꾸지 말아주세요. 같은 이름으로 올리면 예전 파일을 알아서 덮어써요.<br>
              사람들한테는 이 PNG를 나눠주면 돼요. 다음에 고칠 때도 이 버튼만 다시 누르면 돼요.</p>
              ${/^https:\/\/github\.com\//i.test(repoTrimmed) ? '' : '<p class="card_updater_warn">깃헙 주소가 아니라서, 그 주소에서 파일을 바로 받을 수 있는지 꼭 확인해주세요.</p>'}`,
@@ -578,38 +677,111 @@ async function openMenu() {
         return;
     }
     const char = await getFullCharacter(cur.chid);
-    const { Popup, POPUP_RESULT } = ctx();
+    const { Popup, POPUP_TYPE } = ctx();
     const hasUrl = !!char.data?.extensions?.[FIELD]?.manifest_url;
     const backup = await getBackup(char.avatar);
     const version = char.data?.character_version;
 
-    const buttons = [
-        { text: '📁 파일로 업데이트', result: POPUP_RESULT.CUSTOM1, classes: ['popup-button-ok'] },
-    ];
-    if (hasUrl) buttons.push({ text: '🌐 온라인 업데이트 확인', result: POPUP_RESULT.CUSTOM2, classes: ['popup-button-ok'] });
-    if (backup?.blob) buttons.push({ text: '↩️ 이전 버전으로 되돌리기', result: POPUP_RESULT.CUSTOM3 });
-    buttons.push({ text: '📦 배포 파일 만들기 (제작자용)', result: POPUP_RESULT.CUSTOM4 });
+    const backupText = backup?.blob
+        ? `${backup.version ? `v${escapeHtml(backup.version)}` : '이전 버전'} · ${escapeHtml(new Date(backup.date).toLocaleString())}`
+        : '아직 백업이 없어요';
 
-    const backupLine = backup?.blob
-        ? `<p class="card_updater_small">백업: ${backup.version ? `v${escapeHtml(backup.version)}` : '이전 버전'} (${new Date(backup.date).toLocaleString()})</p>`
-        : '';
+    const root = document.createElement('div');
+    root.className = 'cu-menu';
+    root.innerHTML = `
+        <div class="cu-head">
+            <div class="cu-title">Card Updater</div>
+            <div class="cu-bot">
+                <span class="cu-bot-name">${escapeHtml(char.name)}</span>
+                ${version ? `<span class="cu-chip">v${escapeHtml(version)}</span>` : ''}
+            </div>
+        </div>
 
-    const result = await Popup.show.confirm('봇 업데이터',
-        `<p><b>${escapeHtml(char.name)}</b> ${version ? `v${escapeHtml(version)}` : ''}</p>
-         <p class="card_updater_small">새 봇카드를 넣으면 정규식·스크립트·로어북까지 한 번에 최신이 돼요. 채팅 기록은 그대로예요.</p>
-         ${backupLine}`,
-        { okButton: false, cancelButton: '닫기', customButtons: buttons });
+        <div class="cu-tiles">
+            <div class="cu-tile" data-action="file" tabindex="0">
+                <i class="fa-solid fa-file-arrow-up"></i>
+                <div class="cu-tile-title">파일로 업데이트</div>
+                <div class="cu-tile-desc">새 봇카드 PNG 넣기</div>
+            </div>
+            <div class="cu-tile ${hasUrl ? '' : 'cu-disabled'}" data-action="online" tabindex="0"
+                 title="${hasUrl ? '' : '제작자가 업데이트 주소를 넣은 봇만 쓸 수 있어요'}">
+                <i class="fa-solid fa-cloud-arrow-down"></i>
+                <div class="cu-tile-title">온라인 업데이트</div>
+                <div class="cu-tile-desc">${hasUrl ? '최신 버전 확인하기' : '업데이트 주소 없음'}</div>
+            </div>
+        </div>
 
-    switch (result) {
-        case POPUP_RESULT.CUSTOM1: {
-            const file = await pickFile();
-            if (file) await performUpdate(file);
-            break;
+        <div class="cu-list">
+            <div class="cu-row ${backup?.blob ? '' : 'cu-disabled'}" data-action="rollback" tabindex="0">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+                <div class="cu-row-text">
+                    <div class="cu-row-title">이전 버전으로 되돌리기</div>
+                    <div class="cu-row-desc">${backupText}</div>
+                </div>
+                <i class="fa-solid fa-chevron-right cu-arrow"></i>
+            </div>
+            <div class="cu-row" data-action="release" tabindex="0">
+                <i class="fa-solid fa-box-open"></i>
+                <div class="cu-row-text">
+                    <div class="cu-row-title">배포 파일 만들기</div>
+                    <div class="cu-row-desc">제작자용 · 새 버전 올리기</div>
+                </div>
+                <i class="fa-solid fa-chevron-right cu-arrow"></i>
+            </div>
+        </div>
+
+        <div class="cu-settings">
+            <div class="cu-settings-label">이 봇 설정</div>
+            <label class="cu-toggle">
+                <input type="checkbox" data-setting="autoCheck" ${getBotOption(char.avatar, 'autoCheck') ? 'checked' : ''}>
+                <span>봇을 열 때 새 버전 자동 확인</span>
+            </label>
+            <label class="cu-toggle">
+                <input type="checkbox" data-setting="backupLorebook" ${getBotOption(char.avatar, 'backupLorebook') ? 'checked' : ''}>
+                <span>로어북 덮어쓰기 전 _backup 만들기</span>
+            </label>
+        </div>
+
+        <div class="cu-foot">채팅 기록은 업데이트해도 그대로예요.</div>
+    `;
+
+    const popup = new Popup(root, POPUP_TYPE.TEXT, null, { okButton: '닫기', allowVerticalScrolling: true });
+
+    // Settings save immediately on change.
+    root.querySelectorAll('input[data-setting]').forEach(input => {
+        input.addEventListener('change', () => {
+            setBotOption(char.avatar, input.dataset.setting, input.checked);
+        });
+    });
+
+    const run = (action) => {
+        switch (action) {
+            case 'file': {
+                // Open the file picker inside the click handler so the browser treats it as a user action.
+                const picked = pickFile();
+                popup.completeCancelled();
+                picked.then(file => file && performUpdate(file));
+                break;
+            }
+            case 'online': popup.completeCancelled().then(() => onlineUpdate()); break;
+            case 'rollback': popup.completeCancelled().then(() => rollback()); break;
+            case 'release': popup.completeCancelled().then(() => buildRelease()); break;
         }
-        case POPUP_RESULT.CUSTOM2: await onlineUpdate(); break;
-        case POPUP_RESULT.CUSTOM3: await rollback(); break;
-        case POPUP_RESULT.CUSTOM4: await buildRelease(); break;
-    }
+    };
+
+    root.querySelectorAll('[data-action]').forEach(el => {
+        const handler = () => {
+            if (el.classList.contains('cu-disabled')) {
+                if (el.dataset.action === 'online') toastr.info('이 봇에는 업데이트 주소가 없어요. "파일로 업데이트"를 써주세요.', 'Card Updater');
+                return;
+            }
+            run(el.dataset.action);
+        };
+        el.addEventListener('click', handler);
+        el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); } });
+    });
+
+    await popup.show();
 }
 
 function addButton() {
@@ -622,7 +794,7 @@ function addButton() {
     const btn = document.createElement('div');
     btn.id = 'card_updater_button';
     btn.className = 'menu_button fa-solid fa-rotate';
-    btn.title = '봇 업데이트 (Card Updater)';
+    btn.title = 'Card Updater';
     btn.addEventListener('click', () => openMenu().catch(err => {
         console.error(LOG, err);
         toastr.error(err.message, 'Card Updater');
@@ -631,41 +803,45 @@ function addButton() {
     if (fav) fav.after(btn); else block.prepend(btn);
 }
 
-function addSettingsPanel() {
-    const settings = getSettings();
-    const html = `
-    <div id="card_updater_settings" class="extension_settings">
-        <div class="inline-drawer">
-            <div class="inline-drawer-toggle inline-drawer-header">
-                <b>Card Updater (봇 업데이터)</b>
-                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-            </div>
-            <div class="inline-drawer-content">
-                <label class="checkbox_label">
-                    <input id="card_updater_autocheck" type="checkbox" />
-                    <span>봇을 열 때 새 버전 자동 확인</span>
-                </label>
-                <label class="checkbox_label">
-                    <input id="card_updater_backupbook" type="checkbox" />
-                    <span>로어북 덮어쓰기 전에 _backup 복사본 만들기</span>
-                </label>
-                <small>봇카드 창의 🔄 버튼으로 사용해요.</small>
-            </div>
-        </div>
-    </div>`;
-    document.getElementById('extensions_settings2')?.insertAdjacentHTML('beforeend', html);
+// ───────────────── keep embedded lorebook in sync ─────────────────
+// SillyTavern only re-embeds the linked lorebook into the card when the character
+// form is saved. Mirror lorebook edits into every linked card so that ST's normal
+// Export button (and manual sharing) always contains the latest lorebook.
 
-    const { saveSettingsDebounced } = ctx();
-    const auto = document.getElementById('card_updater_autocheck');
-    const bak = document.getElementById('card_updater_backupbook');
-    if (auto) {
-        auto.checked = settings.autoCheck;
-        auto.addEventListener('change', () => { settings.autoCheck = auto.checked; saveSettingsDebounced(); });
+const bookSyncTimers = new Map();
+
+function scheduleBookSync(name, data) {
+    if (!name || !data?.entries) return;
+    clearTimeout(bookSyncTimers.get(name));
+    bookSyncTimers.set(name, setTimeout(() => {
+        bookSyncTimers.delete(name);
+        syncBookIntoCards(name, data).catch(err => console.warn(LOG, 'lorebook sync failed', err));
+    }, 1500));
+}
+
+async function syncBookIntoCards(name, data) {
+    if (busy) return; // an update is running; it handles the lorebook itself
+    const c = ctx();
+    const linked = c.characters.filter(ch => ch?.data?.extensions?.world === name);
+    if (!linked.length) return;
+
+    const book = worldInfoToCharacterBook(name, data.entries);
+    for (const char of linked) {
+        await mergeAttributes(char.avatar, { data: { character_book: book } });
+        if (!char.shallow && char.data) {
+            char.data.character_book = structuredClone(book);
+            if (char.json_data) {
+                const json = JSON.parse(char.json_data);
+                if (json.data) json.data.character_book = structuredClone(book);
+                char.json_data = JSON.stringify(json);
+            }
+        }
     }
-    if (bak) {
-        bak.checked = settings.backupLorebook;
-        bak.addEventListener('change', () => { settings.backupLorebook = bak.checked; saveSettingsDebounced(); });
+    const cur = getCurrent();
+    if (cur && linked.includes(cur.char) && cur.char.json_data) {
+        $('#character_json_data').val(cur.char.json_data);
     }
+    console.debug(LOG, `Embedded lorebook "${name}" into ${linked.length} card(s)`);
 }
 
 // ───────────────────── init ─────────────────────
@@ -675,9 +851,9 @@ function addSettingsPanel() {
     eventSource.on(event_types.APP_READY, () => {
         getSettings();
         addButton();
-        addSettingsPanel();
         console.log(LOG, 'Loaded');
     });
+    eventSource.on(event_types.WORLDINFO_UPDATED, (name, data) => scheduleBookSync(name, data));
     eventSource.on(event_types.CHAT_CHANGED, () => {
         addButton();
         setTimeout(() => autoCheck(), 1500);

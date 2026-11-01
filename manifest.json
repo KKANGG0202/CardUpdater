@@ -1,5 +1,5 @@
 {
-    "display_name": "Card Updater (봇 업데이터)",
+    "display_name": "Card Updater",
     "loading_order": 100,
     "dependencies": [],
     "js": "index.js",
